@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dr.Reju-All &middot; TikTok Shop Ops</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127925;</text></svg>">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<!-- ========== LOGIN GATE ========== -->
+<div id="gate" class="gate">
+  <div class="gate-card">
+    <div class="gate-logo">Dr.Reju-All</div>
+    <h1>TikTok Shop Operations</h1>
+    <p class="gate-sub">Sign in with the ID and password the team gave you.</p>
+    <form id="gate-form" class="gate-form">
+      <input id="gate-id" class="gate-input" type="text" placeholder="ID"
+             autocomplete="username" autocapitalize="off" spellcheck="false">
+      <input id="gate-pw" class="gate-input" type="password" placeholder="Password"
+             autocomplete="current-password">
+      <button type="submit" class="btn btn-primary btn-lg">Sign in</button>
+    </form>
+    <div id="gate-err" class="gate-err" hidden></div>
+    <div class="gate-or"><span>or</span></div>
+    <button id="gate-google" class="btn btn-ghost">Sign in with Google (team accounts)</button>
+    <button id="gate-local" class="btn-link">Continue offline (this device only)</button>
+    <div class="gate-note">Your checklist progress syncs to the team workspace automatically.</div>
+  </div>
+</div>
+
+<!-- ========== APP ========== -->
+<div id="app" class="app" hidden>
+
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">DR</span>
+      <span class="brand-text">Dr.Reju-All<small>TikTok Shop Ops</small></span>
+    </div>
+
+    <div class="shop-switch" id="shop-switch"></div>
+
+    <nav id="nav" class="nav"></nav>
+
+    <div class="side-foot">
+      <div id="user-box" class="user-box"></div>
+      <div class="ver">v1.0</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h2 id="page-title">Today</h2>
+        <div id="page-sub" class="page-sub"></div>
+      </div>
+      <div class="topbar-right">
+        <span id="sync-badge" class="sync-badge">offline</span>
+      </div>
+    </header>
+    <div id="view" class="view"></div>
+  </main>
+
+</div>
+
+<script src="data/sop-us.js"></script>
+<script src="data/sop-uk.js"></script>
+<script src="data/tasks.js"></script>
+<script src="data/handover.js"></script>
+<script src="data/reference.js"></script>
+
+<!-- Firebase bridge: exposes window.FB for app.js -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-firestore.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut }
+  from "https://www.gstatic.com/firebasejs/12.12.1/firebase-auth.js";
+
+const cfg = {
+  apiKey:            "AIzaSyCxU5UQ_B2uytJPJ2UDh1MllBNKpGInF_g",
+  authDomain:        "tts-dashboard-5b16e.firebaseapp.com",
+  projectId:         "tts-dashboard-5b16e",
+  storageBucket:     "tts-dashboard-5b16e.firebasestorage.app",
+  messagingSenderId: "348023047864",
+  appId:             "1:348023047864:web:c9696aea52298563bad64d",
+};
+
+const app  = initializeApp(cfg);
+const db   = getFirestore(app);
+const auth = getAuth(app);
+
+window.FB = {
+  ready: true,
+  signIn: () => signInWithPopup(auth, new GoogleAuthProvider()),
+  signOut: () => signOut(auth),
+  onUser: (cb) => onAuthStateChanged(auth, cb),
+  async get(key) {
+    const snap = await getDoc(doc(db, 'tts_kv', key));
+    if (!snap.exists()) return null;
+    const raw = snap.data();
+    try { return JSON.parse(raw.v.text); } catch { return null; }
+  },
+  async set(key, value) {
+    const ts = Date.now();
+    await setDoc(doc(db, 'tts_kv', key), { v: { text: JSON.stringify(value), ts }, ts });
+  }
+};
+document.dispatchEvent(new Event('fb-ready'));
+</script>
+
+<script src="assets/app.js"></script>
+</body>
+</html>
