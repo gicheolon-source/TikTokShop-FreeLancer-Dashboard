@@ -198,6 +198,45 @@ h1,h2,h3,h4{margin:0;font-weight:650;letter-spacing:-.01em}
 .tpl-b{padding:11px 13px;font-size:12.5px;color:#374151;white-space:pre-wrap}
 .linkrow{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0 0}
 
+/* ---------- today: live performance ---------- */
+.perf-skel{height:74px;border-radius:10px;background:linear-gradient(90deg,#f3f4f6 25%,#e9ebef 37%,#f3f4f6 63%);
+  background-size:400% 100%;animation:shimmer 1.3s ease infinite}
+@keyframes shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+.perf-off{display:flex;flex-direction:column;gap:3px;font-size:12.5px}
+.perf-off b{font-size:13px}
+.perf-off span{color:var(--muted)}
+
+/* ---------- shift notes ---------- */
+.sh-form{display:flex;flex-direction:column;gap:9px}
+.sh-form-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.sh-form-row.end{justify-content:space-between}
+.sh-form input[type=text],.sh-form #sh-name{border:1px solid var(--line);border-radius:8px;padding:7px 11px;font:inherit;
+  font-size:13px;background:#fff;width:180px}
+.sh-form #sh-name:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.sh-form textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px 13px;font:inherit;
+  font-size:13.5px;background:#fff;resize:vertical}
+.sh-form textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.sh-check{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:550}
+.sh-check input{width:16px;height:16px;accent-color:var(--accent)}
+.sh-note{border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:10px;padding:11px 13px;margin-bottom:9px}
+.sh-note.done{border-left-color:var(--green);background:#fafefb}
+.sh-note-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px}
+.sh-note-h b{font-size:13px}
+.sh-note-t{margin-left:auto;color:var(--faint);font-size:11.5px}
+.sh-note-b{font-size:13.5px;margin-top:6px;white-space:pre-wrap}
+.sh-note-a{display:flex;gap:7px;margin-top:9px}
+.chip.ok{background:#ecfdf5;color:#047857}
+
+/* ---------- template library ---------- */
+.tpl-filters{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.tpl-card{padding:0}
+.tpl-card-h{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line);
+  background:#fafbfc;border-radius:var(--radius) var(--radius) 0 0}
+.tpl-card-t{flex:1;min-width:190px}
+.tpl-card-t b{display:block;font-size:13.5px}
+.tpl-card-t span{font-size:11.5px;color:var(--muted)}
+.tpl-card .tpl-b{padding:13px 16px 15px;font-size:13px}
+
 /* ---------- links hub ---------- */
 .lk{display:flex;align-items:center;gap:11px;padding:11px 14px;border:1px solid var(--line);border-radius:10px;
   background:#fff;text-decoration:none;margin-bottom:8px;transition:.14s}

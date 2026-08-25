@@ -23,7 +23,9 @@ const SOPS = { us: window.SOP_US, uk: window.SOP_UK };
 const PAGES = [
   { id: 'today',     icon: '\u2600\uFE0F', label: 'Today',       title: 'Today' },
   { id: 'checklist', icon: '\u2705',       label: 'Checklist',   title: 'Task checklist' },
+  { id: 'shift',     icon: '\u{1F4DD}',    label: 'Shift notes', title: 'Shift notes' },
   { id: 'sop',       icon: '\u{1F4D8}',    label: 'SOP',         title: 'Operation SOP' },
+  { id: 'templates', icon: '\u{1F4AC}',    label: 'Templates',   title: 'Message templates' },
   { id: 'links',     icon: '\u{1F517}',    label: 'Quick Links', title: 'Quick links' },
   { id: 'handover',  icon: '\u{1F501}',    label: 'Handover',    title: 'Handover checklist' },
   { id: 'reference', icon: '\u{1F4D6}',    label: 'Reference',   title: 'Reference' }
@@ -38,7 +40,11 @@ const S = {
   week: mondayISO(new Date()),
   freq: 'daily',
   sopQuery: '',
-  openSop: {}
+  openSop: {},
+  shiftDate: todayISO(),
+  tplQuery: '',
+  tplCat: 'all',
+  tplShop: 'all'
 };
 
 /* ---------------- helpers ---------------- */
@@ -106,6 +112,10 @@ const Store = {
 const keyDaily    = () => `fl_${Store.slug()}_daily_${S.shop}_${S.date}`;
 const keyWeekly   = () => `fl_${Store.slug()}_weekly_${S.shop}_${S.week}`;
 const keyHandover = () => `fl_handover_${S.shop}`;
+/* Shift notes and template counters are shared by the whole team, so they are NOT
+   namespaced per account -- the point is that the next shift reads what you wrote. */
+const keyShift    = date => `fl_shift_${S.shop}_${date}`;
+const keyTplUse   = () => 'fl_tpl_use';
 
 /* ---------------- auth gate ---------------- */
 function emailAllowed(email) {
@@ -275,7 +285,9 @@ function render() {
   ({
     today: viewToday,
     checklist: viewChecklist,
+    shift: viewShift,
     sop: viewSop,
+    templates: viewTemplates,
     links: viewLinks,
     handover: viewHandover,
     reference: viewReference
@@ -315,6 +327,14 @@ async function viewToday(el, token) {
       </div>
     </div>
 
+    <div class="card" id="perf-card">
+      <div class="card-head">
+        <div><h3>Your shop, last 7 days</h3><div class="sub">Live from EUKA &middot; ${sop.flag} ${esc(sop.label)}</div></div>
+        <span class="chip" id="perf-state">loading&hellip;</span>
+      </div>
+      <div class="card-body" id="perf-body"><div class="perf-skel"></div></div>
+    </div>
+
     <div class="card">
       <div class="card-head">
         <div><h3>Today's tasks</h3><div class="sub">Daily routine for the ${esc(sop.label)}</div></div>
@@ -331,6 +351,69 @@ async function viewToday(el, token) {
   wireTasks(el.querySelector('#today-list'), 'daily');
   if (el.querySelector('#today-week')) wireTasks(el.querySelector('#today-week'), 'weekly');
   updateNavBadge(done, tasks.length);
+  loadPerf(S.shop, token);
+}
+
+/* ---------------- today: live shop performance ----------------
+   Served by api/euka.js so the EUKA token stays on the server. The card is
+   decorative: if the proxy is missing (local file server) or not configured yet,
+   it explains itself and the rest of the page keeps working. */
+const perfCache = {};
+
+function money(n, cur) {
+  const sym = cur === 'GBP' ? '\u00A3' : '$';
+  const v = Math.round(n || 0);
+  return sym + v.toLocaleString('en-US');
+}
+function compact(n) {
+  const v = n || 0;
+  if (v >= 1e6) return (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(v >= 1e4 ? 0 : 1) + 'K';
+  return String(Math.round(v));
+}
+
+async function loadPerf(shop, token) {
+  const setState = txt => { const c = $('#perf-state'); if (c) c.textContent = txt; };
+  let data = perfCache[shop];
+  if (!data) {
+    try {
+      const r = await fetch(`api/euka?region=${shop}&days=7`);
+      data = await r.json();
+      if (data && data.ok) perfCache[shop] = data;
+    } catch (e) {
+      data = { ok: false, error: 'Could not reach the data service.' };
+    }
+  }
+  if (stale(token) || S.page !== 'today' || S.shop !== shop) return;
+  const body = $('#perf-body');
+  if (!body) return;
+
+  if (!data || !data.ok) {
+    setState('unavailable');
+    body.innerHTML = `<div class="perf-off">
+      <b>Live numbers are not connected yet.</b>
+      <span>${esc((data && data.error) || 'Unknown error')}</span>
+      <span class="muted">Everything else on this dashboard works without it.</span>
+    </div>`;
+    return;
+  }
+
+  const s = data.samples, a = data.affiliate, cur = data.currency;
+  const rate = s.approvalRate == null ? '\u2014' : s.approvalRate.toFixed(1) + '%';
+  const cells = [
+    { lab: 'Samples shipped', val: compact(s.shipped),  hint: `${compact(s.requests)} requested`, c: 'var(--blue)' },
+    { lab: 'Approval rate',   val: rate,                hint: `${compact(s.approved)} approved`,  c: 'var(--green)' },
+    { lab: 'Content posted',  val: compact(s.posted),   hint: 'videos from samples',              c: 'var(--purple)' },
+    { lab: 'Affiliate GMV',   val: money(a.affiliateGmv, cur), hint: `shop total ${money(a.shopGmv, cur)}`, c: 'var(--accent)' },
+    { lab: 'Active creators', val: compact(a.activeCreators),  hint: `${compact(a.messagesSent)} messages sent`, c: 'var(--amber)' }
+  ];
+  setState(`${data.period.start} \u2192 ${data.period.end}`);
+  body.innerHTML = `<div class="grid g3">${cells.map(k =>
+    `<div class="kpi" style="--c:${k.c}">
+       <div class="lab">${esc(k.lab)}</div>
+       <div class="val">${esc(k.val)}</div>
+       <div class="hint">${esc(k.hint)}</div>
+     </div>`).join('')}</div>`;
 }
 
 function ring(pct) {
@@ -458,6 +541,248 @@ function wireTasks(el, freq) {
   });
 }
 
+/* ---------------- view: shift notes ----------------
+   Daily handover between the part-time and full-time shift. One shared document
+   per shop per day, so whoever comes in next reads what is still open.
+   Notes are stored as a map keyed by note id, and deleting writes a tombstone
+   (`deleted: true`) instead of removing the key -- otherwise another device with a
+   stale local copy would resurrect the note on the next merge. */
+/* The two logins are shared, so ask for a real name instead of repeating the
+   account label -- otherwise every note is signed "Part-time". */
+function accountLabel() {
+  return (S.user && S.user.name) || 'Offline';
+}
+function authorName() {
+  return localStorage.getItem('fl_name') || '';
+}
+function noteList(state) {
+  return Object.values(state || {})
+    .filter(n => n && !n.deleted && n.text)
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+}
+function noteTime(ts) {
+  const d = new Date(ts || 0);
+  return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+
+async function viewShift(el, token) {
+  const date = S.shiftDate;
+  const key = keyShift(date);
+  const state = await Store.load(key);
+  if (stale(token)) return;
+
+  const notes = noteList(state);
+  const open = notes.filter(n => n.follow && !n.resolved);
+
+  /* pull unresolved notes from the previous 7 days so nothing quietly dies */
+  const prevDays = Array.from({ length: 7 }, (_, i) => shiftDays(date, -(i + 1)));
+  const prev = await Promise.all(prevDays.map(async d => ({
+    date: d, notes: noteList(await Store.load(keyShift(d))).filter(n => n.follow && !n.resolved)
+  })));
+  if (stale(token)) return;
+  const carry = prev.filter(p => p.notes.length);
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-head" style="flex-wrap:wrap">
+        <div><h3>Shift log &middot; ${prettyDate(date)}</h3>
+          <div class="sub">Shared with the whole team. Write what the next shift needs to know.</div></div>
+        <div class="datebar">
+          <button class="btn btn-sm" data-snav="-1">&lsaquo;</button>
+          <input type="date" id="sh-date" value="${date}">
+          <button class="btn btn-sm" data-snav="1">&rsaquo;</button>
+          <button class="btn btn-sm" data-snav="0">Today</button>
+          <span class="chip${open.length ? ' wknd' : ''}">${open.length} open</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="sh-form">
+          <div class="sh-form-row">
+            <input id="sh-name" placeholder="Your name" value="${esc(authorName())}">
+            <label class="sh-check"><input type="checkbox" id="sh-follow" checked> Needs follow-up</label>
+          </div>
+          <textarea id="sh-text" rows="3"
+            placeholder="e.g. Order 5773xxxx \u2014 customer waiting on a reshipment, MCF order not created yet."></textarea>
+          <div class="sh-form-row end">
+            <span class="muted" style="font-size:12px">Signed in as <b>${esc(accountLabel())}</b></span>
+            <button class="btn btn-primary btn-sm" id="sh-add">Add note</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${carry.length ? `<div class="card">
+      <div class="card-head"><div><h3>Still open from earlier</h3>
+        <div class="sub">Unresolved follow-ups from the past week</div></div>
+        <span class="chip wknd">${carry.reduce((n, p) => n + p.notes.length, 0)}</span></div>
+      <div class="card-body tight" style="padding-top:12px">
+        ${carry.map(p => p.notes.map(n => noteHtml(n, p.date, true)).join('')).join('')}
+      </div>
+    </div>` : ''}
+
+    <div class="card">
+      <div class="card-head"><h3>Notes for this day</h3><span class="chip">${notes.length}</span></div>
+      <div class="card-body tight" style="padding-top:12px" id="sh-list">
+        ${notes.length ? notes.map(n => noteHtml(n, date, false)).join('')
+                       : '<div class="empty">No notes yet for this day.</div>'}
+      </div>
+    </div>`;
+
+  el.querySelectorAll('[data-snav]').forEach(b => {
+    b.onclick = () => {
+      const n = +b.dataset.snav;
+      S.shiftDate = n === 0 ? todayISO() : shiftDays(S.shiftDate, n);
+      render();
+    };
+  });
+  const di = el.querySelector('#sh-date');
+  di.onchange = () => { S.shiftDate = di.value || todayISO(); render(); };
+
+  el.querySelector('#sh-add').onclick = () => {
+    const ta = el.querySelector('#sh-text');
+    const text = ta.value.trim();
+    const name = el.querySelector('#sh-name').value.trim();
+    if (!name) { el.querySelector('#sh-name').focus(); return; }
+    if (!text) { ta.focus(); return; }
+    localStorage.setItem('fl_name', name);
+    const st = Store.local(key) || {};
+    const id = 'n' + Date.now() + Math.random().toString(36).slice(2, 6);
+    st[id] = {
+      id, ts: Date.now(), author: name, shift: accountLabel(),
+      follow: el.querySelector('#sh-follow').checked,
+      resolved: false, text
+    };
+    Store.set(key, st);
+    render();
+  };
+
+  const mutate = (noteDate, id, patch) => {
+    const k = keyShift(noteDate);
+    const st = Store.local(k) || {};
+    if (!st[id]) return;
+    st[id] = Object.assign({}, st[id], patch);
+    Store.set(k, st);
+    render();
+  };
+  el.querySelectorAll('[data-note-act]').forEach(b => {
+    b.onclick = () => {
+      const { noteAct: act, noteId: id, noteDate: d } = b.dataset;
+      if (act === 'resolve')  mutate(d, id, { resolved: true });
+      if (act === 'reopen')   mutate(d, id, { resolved: false });
+      if (act === 'delete' && confirm('Delete this note?')) mutate(d, id, { deleted: true });
+    };
+  });
+}
+
+function noteHtml(n, date, showDate) {
+  const resolved = !!n.resolved;
+  return `<div class="sh-note${resolved ? ' done' : ''}">
+    <div class="sh-note-h">
+      <b>${esc(n.author || 'Unknown')}</b>
+      <span class="chip">${esc(n.shift || 'Shift')}</span>
+      ${n.follow ? `<span class="chip ${resolved ? 'ok' : 'wknd'}">${resolved ? 'resolved' : 'needs follow-up'}</span>` : ''}
+      <span class="sh-note-t">${showDate ? esc(prettyDate(date)) + ' &middot; ' : ''}${noteTime(n.ts)}</span>
+    </div>
+    <div class="sh-note-b">${esc(n.text)}</div>
+    <div class="sh-note-a">
+      ${n.follow ? `<button class="btn btn-sm" data-note-act="${resolved ? 'reopen' : 'resolve'}"
+        data-note-id="${esc(n.id)}" data-note-date="${esc(date)}">${resolved ? 'Reopen' : 'Mark resolved'}</button>` : ''}
+      <button class="btn btn-sm" data-note-act="delete" data-note-id="${esc(n.id)}" data-note-date="${esc(date)}">Delete</button>
+    </div>
+  </div>`;
+}
+
+/* ---------------- view: message templates ----------------
+   The copy-ready replies live inside the SOP data (blocks with `t: 'templates'`).
+   This view harvests them so there is exactly one source of truth, and ranks by
+   how often the team actually copies each one. */
+function collectTemplates() {
+  const out = [];
+  ['us', 'uk'].forEach(shop => {
+    const sop = SOPS[shop];
+    if (!sop) return;
+    sop.groups.forEach(g => g.items.forEach(item => {
+      (item.blocks || []).forEach(b => {
+        if (b.t !== 'templates') return;
+        b.items.forEach(t => out.push({
+          id: `${shop}|${item.id}|${t.label}`,
+          shop, cat: g.title, catIcon: g.icon,
+          sopId: item.id, sopTitle: item.title,
+          context: b.title || '', label: t.label, text: t.text
+        }));
+      });
+    }));
+  });
+  return out;
+}
+
+function viewTemplates(el) {
+  const all = collectTemplates();
+  const use = Store.local(keyTplUse()) || {};
+  const cats = [...new Set(all.map(t => t.cat))];
+  const q = S.tplQuery.trim().toLowerCase();
+
+  const rows = all
+    .filter(t => S.tplShop === 'all' || t.shop === S.tplShop)
+    .filter(t => S.tplCat === 'all' || t.cat === S.tplCat)
+    .filter(t => !q || (t.label + ' ' + t.text + ' ' + t.sopTitle + ' ' + t.context).toLowerCase().includes(q))
+    .sort((a, b) => (use[b.id] || 0) - (use[a.id] || 0));
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-body">
+        <input class="sop-search" id="tpl-q" placeholder="Search templates \u2014 e.g. refund, sample, retainer" value="${esc(S.tplQuery)}">
+        <div class="tpl-filters">
+          <div class="seg">
+            <button data-tshop="all" class="${S.tplShop === 'all' ? 'on' : ''}">All shops</button>
+            ${['us', 'uk'].map(s => `<button data-tshop="${s}" class="${S.tplShop === s ? 'on' : ''}">${SOPS[s].flag} ${s.toUpperCase()}</button>`).join('')}
+          </div>
+          <div class="seg">
+            <button data-tcat="all" class="${S.tplCat === 'all' ? 'on' : ''}">All topics</button>
+            ${cats.map(c => `<button data-tcat="${esc(c)}" class="${S.tplCat === c ? 'on' : ''}">${esc(c)}</button>`).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${rows.length ? rows.map(t => {
+      const n = use[t.id] || 0;
+      return `<div class="card tpl-card">
+        <div class="tpl-card-h">
+          <div class="tpl-card-t">
+            <b>${esc(t.label)}</b>
+            <span>${SOPS[t.shop].flag} ${esc(t.cat)} &middot; ${esc(t.sopTitle)}${t.context ? ' &middot; ' + esc(t.context) : ''}</span>
+          </div>
+          ${n ? `<span class="chip">used ${n}\u00D7</span>` : ''}
+          <button class="chip sop" data-sop="${esc(t.sopId)}">SOP</button>
+          <button class="btn btn-sm btn-primary" data-copy="${esc(t.text)}" data-tplid="${esc(t.id)}">Copy</button>
+        </div>
+        <div class="tpl-b">${esc(t.text)}</div>
+      </div>`;
+    }).join('') : '<div class="empty">No template matches that filter.</div>'}
+
+    <div class="blk warn"><div class="blk-h">\u26A0\uFE0F Before you send</div>
+      <ul><li>Replace every bracketed placeholder (e.g. [Customer Name]) before sending.</li>
+      <li>Templates are a starting point \u2014 match the customer's actual issue, and never promise a refund you have not been cleared to give.</li></ul></div>`;
+
+  const qi = el.querySelector('#tpl-q');
+  qi.oninput = () => {
+    S.tplQuery = qi.value;
+    const pos = qi.selectionStart;
+    render();
+    const n = $('#tpl-q'); n.focus(); n.setSelectionRange(pos, pos);
+  };
+  el.querySelectorAll('[data-tshop]').forEach(b => {
+    b.onclick = () => { S.tplShop = b.dataset.tshop; render(); };
+  });
+  el.querySelectorAll('[data-tcat]').forEach(b => {
+    b.onclick = () => { S.tplCat = b.dataset.tcat; render(); };
+  });
+  el.querySelectorAll('[data-sop]').forEach(b => {
+    b.onclick = () => go('sop', { item: b.dataset.sop });
+  });
+}
+
 /* ---------------- view: SOP ---------------- */
 function viewSop(el) {
   const sop = SOPS[S.shop];
@@ -562,6 +887,12 @@ document.addEventListener('click', e => {
     b.textContent = 'Copied';
     setTimeout(() => { b.textContent = old; }, 1400);
   });
+  /* templates carry an id so the library can rank by real usage */
+  if (b.dataset.tplid) {
+    const use = Store.local(keyTplUse()) || {};
+    use[b.dataset.tplid] = (use[b.dataset.tplid] || 0) + 1;
+    Store.set(keyTplUse(), use);
+  }
 });
 
 /* ---------------- view: links ---------------- */
