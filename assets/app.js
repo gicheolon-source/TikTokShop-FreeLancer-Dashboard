@@ -26,6 +26,8 @@ const PAGES = [
   { id: 'shift',     icon: '\u{1F4DD}',    label: 'Shift notes', title: 'Shift notes' },
   { id: 'sop',       icon: '\u{1F4D8}',    label: 'SOP',         title: 'Operation SOP' },
   { id: 'templates', icon: '\u{1F4AC}',    label: 'Templates',   title: 'Message templates' },
+  { id: 'products',  icon: '\u{1F9F4}',    label: 'Products',    title: 'Product information' },
+  { id: 'issues',    icon: '\u{1F6A8}',    label: 'Critical issues', title: 'Critical issues' },
   { id: 'links',     icon: '\u{1F517}',    label: 'Quick Links', title: 'Quick links' },
   { id: 'handover',  icon: '\u{1F501}',    label: 'Handover',    title: 'Handover checklist' },
   { id: 'reference', icon: '\u{1F4D6}',    label: 'Reference',   title: 'Reference' }
@@ -41,10 +43,14 @@ const S = {
   freq: 'daily',
   sopQuery: '',
   openSop: {},
-  shiftDate: todayISO(),
+  shiftWeek: mondayISO(new Date()),
   tplQuery: '',
   tplCat: 'all',
-  tplShop: 'all'
+  tplShop: 'all',
+  prodQuery: '',
+  openProd: {},
+  issueFilter: 'all',
+  issueEdit: null
 };
 
 /* ---------------- helpers ---------------- */
@@ -112,10 +118,75 @@ const Store = {
 const keyDaily    = () => `fl_${Store.slug()}_daily_${S.shop}_${S.date}`;
 const keyWeekly   = () => `fl_${Store.slug()}_weekly_${S.shop}_${S.week}`;
 const keyHandover = () => `fl_handover_${S.shop}`;
-/* Shift notes and template counters are shared by the whole team, so they are NOT
-   namespaced per account -- the point is that the next shift reads what you wrote. */
-const keyShift    = date => `fl_shift_${S.shop}_${date}`;
+/* Shift notes, template counters, wording edits and the issue log are shared by the
+   whole team, so they are NOT namespaced per account -- the point is that the next
+   shift reads what you wrote. */
+const keyShift    = week => `fl_shift_${S.shop}_w${week}`;
 const keyTplUse   = () => 'fl_tpl_use';
+const keyIssues   = () => 'fl_issues';
+const keyEdits    = () => 'fl_content';
+
+/* ---------------- editable wording ----------------
+   Everything the freelancers read comes from data/*.js. When a step is wrong they
+   should not have to wait for a developer, so any text tagged with `ed(path, ...)`
+   can be corrected in the browser. Corrections are keyed by a stable path and kept
+   in one shared document, layered on top of the file. Restoring the original just
+   deletes the key, so re-exporting data/*.js later never fights with the overrides. */
+let EDITS = {};
+let editMode = false;
+
+function ed(path, text) {
+  const o = EDITS[path];
+  return o == null ? (text == null ? '' : String(text)) : o;
+}
+/* renders editable text: escaped, plus the marker the edit mode hooks onto */
+function edt(path, text, tag) {
+  const t = tag || 'span';
+  return `<${t} data-ed="${esc(path)}">${esc(ed(path, text))}</${t}>`;
+}
+function saveEdit(path, value, original) {
+  const next = Object.assign({}, EDITS);
+  const clean = String(value).replace(/\s+$/, '');
+  if (clean === String(original == null ? '' : original) || (!clean && !original)) delete next[path];
+  else next[path] = clean;
+  EDITS = next;
+  Store.set(keyEdits(), next);
+}
+/* Called after every render. In edit mode each tagged node becomes a text box that
+   saves on blur; the original text is stashed so an unchanged edit clears the
+   override instead of storing a duplicate of the file content. */
+function applyEdit(root) {
+  root.querySelectorAll('[data-ed]').forEach(node => {
+    if (!editMode) { node.removeAttribute('contenteditable'); node.classList.remove('ed-on'); return; }
+    const path = node.dataset.ed;
+    node.contentEditable = 'true';
+    node.spellcheck = false;
+    node.classList.add('ed-on');
+    const before = node.innerText;
+    node.onblur = () => {
+      const after = node.innerText.trim();
+      if (after === before.trim()) return;
+      /* the file value is `before` only when nothing was overridden yet */
+      const original = EDITS[path] == null ? before.trim() : null;
+      saveEdit(path, after, original);
+      render();
+    };
+    node.onkeydown = e => {
+      if (e.key === 'Escape') { node.innerText = before; node.blur(); }
+      if (e.key === 'Enter' && !e.shiftKey && !node.dataset.edMultiline) { e.preventDefault(); node.blur(); }
+    };
+  });
+}
+function setEditMode(on) {
+  editMode = on;
+  document.body.classList.toggle('editing', on);
+  const b = $('#edit-toggle');
+  if (b) {
+    b.classList.toggle('btn-primary', on);
+    b.innerHTML = on ? '\u2713 Done editing' : '\u270E Edit';
+  }
+  render();
+}
 
 /* ---------------- auth gate ---------------- */
 function emailAllowed(email) {
@@ -192,14 +263,17 @@ function startAuth() {
 
 /* ---------------- boot ---------------- */
 let booted = false;
-function boot() {
+async function boot() {
   if (booted) { render(); return; }
   booted = true;
   renderShopSwitch();
   renderNav();
   renderUserBox();
+  $('#edit-toggle').onclick = () => setEditMode(!editMode);
   window.addEventListener('hashchange', readHash);
   readHash();
+  EDITS = await Store.load(keyEdits());
+  render();
 }
 
 function readHash() {
@@ -282,16 +356,20 @@ function render() {
   const view = $('#view');
   view.scrollTop = 0;
   const token = ++renderToken;
-  ({
+  const out = ({
     today: viewToday,
     checklist: viewChecklist,
     shift: viewShift,
     sop: viewSop,
     templates: viewTemplates,
+    products: viewProducts,
+    issues: viewIssues,
     links: viewLinks,
     handover: viewHandover,
     reference: viewReference
   })[S.page](view, token);
+  /* views may be async, so wire the edit boxes once the markup is actually there */
+  Promise.resolve(out).then(() => { if (!stale(token)) applyEdit(view); });
 }
 
 /* ---------------- view: today ---------------- */
@@ -514,7 +592,7 @@ function taskListHtml(tasks, state, freq) {
           ${readOnly ? '<span class="nav-ico" style="margin-top:2px">\u26A1</span>'
                      : `<input class="cb" type="checkbox" ${done ? 'checked' : ''} data-cb="${t.id}">`}
           <div class="task-main">
-            <div class="task-title" ${readOnly ? '' : `data-toggle="${t.id}"`}>${esc(t.title)}</div>
+            <div class="task-title" ${readOnly ? '' : `data-toggle="${t.id}"`}>${edt(`task.${S.shop}.${t.id}`, t.title)}</div>
             <div class="task-meta">
               ${t.weekend ? '<span class="chip wknd">incl. weekend</span>' : ''}
               ${t.sop ? `<button class="chip sop" data-sop="${t.sop}">SOP</button>` : ''}
@@ -529,6 +607,7 @@ function taskListHtml(tasks, state, freq) {
 function wireTasks(el, freq) {
   const key = freq === 'weekly' ? keyWeekly() : keyDaily();
   const toggle = id => {
+    if (editMode) return;   /* the title is a text box right now */
     const state = Store.local(key) || {};
     state[id] = !state[id];
     Store.set(key, state);
@@ -542,8 +621,10 @@ function wireTasks(el, freq) {
 }
 
 /* ---------------- view: shift notes ----------------
-   Daily handover between the part-time and full-time shift. One shared document
-   per shop per day, so whoever comes in next reads what is still open.
+   The handover is weekly, not daily: the full-time operator covers Mon-Fri and hands
+   over on Friday, the part-time operator covers Sat-Sun and hands back on Sunday.
+   So one shared document per shop per WEEK, split into a full-time and a part-time
+   column, and whoever starts their shift reads the other column.
    Notes are stored as a map keyed by note id, and deleting writes a tombstone
    (`deleted: true`) instead of removing the key -- otherwise another device with a
    stale local copy would resurrect the note on the next merge. */
@@ -565,33 +646,73 @@ function noteTime(ts) {
   return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
+const ROLES = {
+  full: { label: 'Full-time', days: 'Mon \u2013 Fri', hint: 'Weekday shift' },
+  part: { label: 'Part-time', days: 'Sat \u2013 Sun', hint: 'Weekend shift' }
+};
+/* Notes written before the weekly split have no role -- put them where the day says. */
+function noteRole(n) {
+  const g = new Date(n.ts || 0).getDay();
+  return (n.role === 'full' || n.role === 'part') ? n.role : (g === 0 || g === 6 ? 'part' : 'full');
+}
+function defaultRole() {
+  const id = (S.user && S.user.id) || '';
+  if (id === 'rejuall-parttime') return 'part';
+  if (id === 'rejuall-fulltime') return 'full';
+  return isWeekend(todayISO()) ? 'part' : 'full';
+}
+function weekLabel(monday) {
+  const a = new Date(monday + 'T00:00:00'), b = new Date(monday + 'T00:00:00');
+  b.setDate(b.getDate() + 6);
+  const f = (d, yr) => d.toLocaleDateString('en-GB',
+    yr ? { day: 'numeric', month: 'short', year: 'numeric' } : { day: 'numeric', month: 'short' });
+  return `${f(a)} \u2013 ${f(b, true)}`;
+}
+
 async function viewShift(el, token) {
-  const date = S.shiftDate;
-  const key = keyShift(date);
+  const week = S.shiftWeek;
+  const key = keyShift(week);
   const state = await Store.load(key);
   if (stale(token)) return;
 
   const notes = noteList(state);
   const open = notes.filter(n => n.follow && !n.resolved);
+  const thisWeek = mondayISO(new Date());
 
-  /* pull unresolved notes from the previous 7 days so nothing quietly dies */
-  const prevDays = Array.from({ length: 7 }, (_, i) => shiftDays(date, -(i + 1)));
-  const prev = await Promise.all(prevDays.map(async d => ({
-    date: d, notes: noteList(await Store.load(keyShift(d))).filter(n => n.follow && !n.resolved)
+  /* pull unresolved notes from the previous 4 weeks so nothing quietly dies */
+  const prevWeeks = Array.from({ length: 4 }, (_, i) => shiftDays(week, -7 * (i + 1)));
+  const prev = await Promise.all(prevWeeks.map(async w => ({
+    week: w, notes: noteList(await Store.load(keyShift(w))).filter(n => n.follow && !n.resolved)
   })));
   if (stale(token)) return;
   const carry = prev.filter(p => p.notes.length);
 
+  const column = role => {
+    const r = ROLES[role];
+    const list = notes.filter(n => noteRole(n) === role);
+    const stillOpen = list.filter(n => n.follow && !n.resolved).length;
+    return `<div class="card sh-col">
+      <div class="card-head">
+        <div><h3>${r.label} shift notes</h3><div class="sub">${r.days} &middot; ${r.hint}</div></div>
+        <span class="chip${stillOpen ? ' wknd' : ''}">${stillOpen ? stillOpen + ' open' : list.length}</span>
+      </div>
+      <div class="card-body tight" style="padding-top:12px">
+        ${list.length ? list.map(n => noteHtml(n, week, false)).join('')
+                      : `<div class="empty">Nothing logged by the ${r.label.toLowerCase()} shift this week.</div>`}
+      </div>
+    </div>`;
+  };
+
   el.innerHTML = `
     <div class="card">
       <div class="card-head" style="flex-wrap:wrap">
-        <div><h3>Shift log &middot; ${prettyDate(date)}</h3>
-          <div class="sub">Shared with the whole team. Write what the next shift needs to know.</div></div>
+        <div><h3>Shift log &middot; ${weekLabel(week)}</h3>
+          <div class="sub">One log per week. The weekday shift hands over on Friday, the weekend shift hands back on Sunday.</div></div>
         <div class="datebar">
           <button class="btn btn-sm" data-snav="-1">&lsaquo;</button>
-          <input type="date" id="sh-date" value="${date}">
+          <input type="date" id="sh-date" value="${week}">
           <button class="btn btn-sm" data-snav="1">&rsaquo;</button>
-          <button class="btn btn-sm" data-snav="0">Today</button>
+          <button class="btn btn-sm" data-snav="0"${week === thisWeek ? ' disabled' : ''}>This week</button>
           <span class="chip${open.length ? ' wknd' : ''}">${open.length} open</span>
         </div>
       </div>
@@ -599,6 +720,10 @@ async function viewShift(el, token) {
         <div class="sh-form">
           <div class="sh-form-row">
             <input id="sh-name" placeholder="Your name" value="${esc(authorName())}">
+            <select id="sh-role">
+              ${Object.keys(ROLES).map(r =>
+                `<option value="${r}"${r === defaultRole() ? ' selected' : ''}>${ROLES[r].label} (${ROLES[r].days})</option>`).join('')}
+            </select>
             <label class="sh-check"><input type="checkbox" id="sh-follow" checked> Needs follow-up</label>
           </div>
           <textarea id="sh-text" rows="3"
@@ -612,31 +737,26 @@ async function viewShift(el, token) {
     </div>
 
     ${carry.length ? `<div class="card">
-      <div class="card-head"><div><h3>Still open from earlier</h3>
-        <div class="sub">Unresolved follow-ups from the past week</div></div>
+      <div class="card-head"><div><h3>Still open from earlier weeks</h3>
+        <div class="sub">Unresolved follow-ups from the past 4 weeks</div></div>
         <span class="chip wknd">${carry.reduce((n, p) => n + p.notes.length, 0)}</span></div>
       <div class="card-body tight" style="padding-top:12px">
-        ${carry.map(p => p.notes.map(n => noteHtml(n, p.date, true)).join('')).join('')}
+        ${carry.map(p => p.notes.map(n => noteHtml(n, p.week, true)).join('')).join('')}
       </div>
     </div>` : ''}
 
-    <div class="card">
-      <div class="card-head"><h3>Notes for this day</h3><span class="chip">${notes.length}</span></div>
-      <div class="card-body tight" style="padding-top:12px" id="sh-list">
-        ${notes.length ? notes.map(n => noteHtml(n, date, false)).join('')
-                       : '<div class="empty">No notes yet for this day.</div>'}
-      </div>
-    </div>`;
+    <div class="sh-grid">${column('full')}${column('part')}</div>`;
 
   el.querySelectorAll('[data-snav]').forEach(b => {
     b.onclick = () => {
       const n = +b.dataset.snav;
-      S.shiftDate = n === 0 ? todayISO() : shiftDays(S.shiftDate, n);
+      S.shiftWeek = n === 0 ? thisWeek : shiftDays(S.shiftWeek, 7 * n);
       render();
     };
   });
+  /* picking any day jumps to the week it belongs to */
   const di = el.querySelector('#sh-date');
-  di.onchange = () => { S.shiftDate = di.value || todayISO(); render(); };
+  di.onchange = () => { S.shiftWeek = mondayISO(new Date((di.value || todayISO()) + 'T00:00:00')); render(); };
 
   el.querySelector('#sh-add').onclick = () => {
     const ta = el.querySelector('#sh-text');
@@ -645,10 +765,11 @@ async function viewShift(el, token) {
     if (!name) { el.querySelector('#sh-name').focus(); return; }
     if (!text) { ta.focus(); return; }
     localStorage.setItem('fl_name', name);
+    const role = el.querySelector('#sh-role').value;
     const st = Store.local(key) || {};
     const id = 'n' + Date.now() + Math.random().toString(36).slice(2, 6);
     st[id] = {
-      id, ts: Date.now(), author: name, shift: accountLabel(),
+      id, ts: Date.now(), author: name, role, shift: ROLES[role].label,
       follow: el.querySelector('#sh-follow').checked,
       resolved: false, text
     };
@@ -656,8 +777,8 @@ async function viewShift(el, token) {
     render();
   };
 
-  const mutate = (noteDate, id, patch) => {
-    const k = keyShift(noteDate);
+  const mutate = (noteWeek, id, patch) => {
+    const k = keyShift(noteWeek);
     const st = Store.local(k) || {};
     if (!st[id]) return;
     st[id] = Object.assign({}, st[id], patch);
@@ -666,28 +787,29 @@ async function viewShift(el, token) {
   };
   el.querySelectorAll('[data-note-act]').forEach(b => {
     b.onclick = () => {
-      const { noteAct: act, noteId: id, noteDate: d } = b.dataset;
-      if (act === 'resolve')  mutate(d, id, { resolved: true });
-      if (act === 'reopen')   mutate(d, id, { resolved: false });
-      if (act === 'delete' && confirm('Delete this note?')) mutate(d, id, { deleted: true });
+      const { noteAct: act, noteId: id, noteDate: w } = b.dataset;
+      if (act === 'resolve')  mutate(w, id, { resolved: true });
+      if (act === 'reopen')   mutate(w, id, { resolved: false });
+      if (act === 'delete' && confirm('Delete this note?')) mutate(w, id, { deleted: true });
     };
   });
 }
 
-function noteHtml(n, date, showDate) {
+function noteHtml(n, week, showWeek) {
   const resolved = !!n.resolved;
+  const day = new Date(n.ts || 0).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
   return `<div class="sh-note${resolved ? ' done' : ''}">
     <div class="sh-note-h">
       <b>${esc(n.author || 'Unknown')}</b>
-      <span class="chip">${esc(n.shift || 'Shift')}</span>
+      <span class="chip">${esc(n.shift || ROLES[noteRole(n)].label)}</span>
       ${n.follow ? `<span class="chip ${resolved ? 'ok' : 'wknd'}">${resolved ? 'resolved' : 'needs follow-up'}</span>` : ''}
-      <span class="sh-note-t">${showDate ? esc(prettyDate(date)) + ' &middot; ' : ''}${noteTime(n.ts)}</span>
+      <span class="sh-note-t">${showWeek ? esc(weekLabel(week)) + ' &middot; ' : ''}${esc(day)} ${noteTime(n.ts)}</span>
     </div>
     <div class="sh-note-b">${esc(n.text)}</div>
     <div class="sh-note-a">
       ${n.follow ? `<button class="btn btn-sm" data-note-act="${resolved ? 'reopen' : 'resolve'}"
-        data-note-id="${esc(n.id)}" data-note-date="${esc(date)}">${resolved ? 'Reopen' : 'Mark resolved'}</button>` : ''}
-      <button class="btn btn-sm" data-note-act="delete" data-note-id="${esc(n.id)}" data-note-date="${esc(date)}">Delete</button>
+        data-note-id="${esc(n.id)}" data-note-date="${esc(week)}">${resolved ? 'Reopen' : 'Mark resolved'}</button>` : ''}
+      <button class="btn btn-sm" data-note-act="delete" data-note-id="${esc(n.id)}" data-note-date="${esc(week)}">Delete</button>
     </div>
   </div>`;
 }
@@ -702,13 +824,16 @@ function collectTemplates() {
     const sop = SOPS[shop];
     if (!sop) return;
     sop.groups.forEach(g => g.items.forEach(item => {
-      (item.blocks || []).forEach(b => {
+      (item.blocks || []).forEach((b, bi) => {
         if (b.t !== 'templates') return;
-        b.items.forEach(t => out.push({
+        const p = `sop.${shop}.${item.id}.b${bi}`;
+        b.items.forEach((t, n) => out.push({
           id: `${shop}|${item.id}|${t.label}`,
           shop, cat: g.title, catIcon: g.icon,
-          sopId: item.id, sopTitle: item.title,
-          context: b.title || '', label: t.label, text: t.text
+          sopId: item.id, sopTitle: ed(`sop.${shop}.${item.id}.title`, item.title),
+          context: b.title || '',
+          label: ed(`${p}.i${n}.l`, t.label),
+          text: ed(`${p}.i${n}.text`, t.text)
         }));
       });
     }));
@@ -783,6 +908,222 @@ function viewTemplates(el) {
   });
 }
 
+/* ---------------- view: products ----------------
+   Answering a customer means knowing the product. One accordion per SKU with the
+   facts CS actually gets asked for, all of it editable in Edit mode. */
+const PROD_FIELDS = [
+  { k: 'benefits',    t: 'Key benefits',        icon: '\u2728' },
+  { k: 'ingredients', t: 'Key ingredients',     icon: '\u{1F9EA}' },
+  { k: 'howto',       t: 'How to use',          icon: '\u{1F4CB}' },
+  { k: 'audience',    t: 'Who it is for',       icon: '\u{1F464}' },
+  { k: 'unique',      t: 'What makes it different', icon: '\u{1F3AF}' },
+  { k: 'clinical',    t: 'Clinical results',    icon: '\u{1F4CA}' },
+  { k: 'caution',     t: 'Cautions',            icon: '\u26A0\uFE0F' },
+  { k: 'csnotes',     t: 'CS quick answers',    icon: '\u{1F4AC}' }
+];
+
+function viewProducts(el) {
+  const all = window.PRODUCTS || [];
+  const q = S.prodQuery.trim().toLowerCase();
+  const rows = all.filter(p => !q ||
+    JSON.stringify(p).toLowerCase().includes(q));
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-body">
+        <input class="sop-search" id="prod-q"
+          placeholder="Search products \u2014 e.g. PDRN, retinol, sunscreen, pregnancy" value="${esc(S.prodQuery)}">
+        <div class="sub" style="margin-top:8px">${rows.length} of ${all.length} products \u00B7 same catalogue on TikTok Shop and Shopee.</div>
+      </div>
+    </div>
+
+    ${rows.length ? rows.map(p => {
+      const open = !!S.openProd[p.id];
+      const path = f => `prod.${p.id}.${f}`;
+      return `<div class="card prod${open ? ' open' : ''}">
+        <div class="prod-h" data-prod="${esc(p.id)}">
+          <span class="prod-code">${esc(p.code || '')}</span>
+          <div class="prod-t">
+            <b>${edt(path('name'), p.name)}</b>
+            <span>${edt(path('category'), p.category)}${p.size ? ' \u00B7 ' + esc(p.size) : ''}</span>
+          </div>
+          <span class="chip${/on sale/i.test(p.status || '') ? ' ok' : ''}">${esc(p.status || '\u2014')}</span>
+          <span class="prod-caret">${open ? '\u2212' : '+'}</span>
+        </div>
+        ${open ? `<div class="prod-b">
+          ${p.summary ? `<div class="prod-sum">${edt(path('summary'), p.summary)}</div>` : ''}
+          ${(p.countries || []).length ? `<div class="prod-tags">${p.countries.map(c => `<span class="chip">${esc(c)}</span>`).join('')}</div>` : ''}
+          ${PROD_FIELDS.map(f => {
+            const list = p[f.k] || [];
+            if (!list.length) return '';
+            return `<div class="blk"><div class="blk-h">${f.icon} ${f.t}</div>
+              <ul>${list.map((v, i) => `<li>${edt(`${path(f.k)}.${i}`, v)}</li>`).join('')}</ul></div>`;
+          }).join('')}
+          ${p.restock ? `<div class="prod-foot">Restock: ${edt(path('restock'), p.restock)}</div>` : ''}
+          <div class="sh-form-row end">
+            <button class="btn btn-sm" data-copy="${esc([p.name, p.summary, (p.csnotes || []).join('\n')].filter(Boolean).join('\n'))}">Copy CS summary</button>
+          </div>
+        </div>` : ''}
+      </div>`;
+    }).join('') : '<div class="empty">No product matches that search.</div>'}`;
+
+  const qi = el.querySelector('#prod-q');
+  qi.oninput = () => {
+    S.prodQuery = qi.value;
+    const pos = qi.selectionStart;
+    render();
+    const n = $('#prod-q'); n.focus(); n.setSelectionRange(pos, pos);
+  };
+  el.querySelectorAll('[data-prod]').forEach(h => {
+    h.onclick = () => {
+      const id = h.dataset.prod;
+      S.openProd[id] = !S.openProd[id];
+      render();
+    };
+  });
+}
+
+/* ---------------- view: critical issues ----------------
+   Outside HQ hours a freelancer cannot resolve everything. Rather than let a case
+   sit in a chat window, it gets logged here with the order number so HQ can answer
+   it on Monday. Seed rows come from the working sheet; anything logged in the
+   dashboard lives in one shared document and is merged on top (tombstone deletes,
+   same reason as the shift notes). */
+const ISSUE_STATUS = {
+  open:     { label: 'Waiting for HQ', chip: 'wknd' },
+  checking: { label: 'Being checked',  chip: '' },
+  answered: { label: 'Answered',       chip: 'ok' }
+};
+function issueList(patch) {
+  const seed = (window.ISSUE_SEED || []).map(i => Object.assign({}, i));
+  const byId = {};
+  seed.forEach(i => { byId[i.id] = i; });
+  Object.values(patch || {}).forEach(i => {
+    if (!i || !i.id) return;
+    byId[i.id] = Object.assign({}, byId[i.id], i);
+  });
+  return Object.values(byId)
+    .filter(i => !i.deleted)
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+}
+
+async function viewIssues(el, token) {
+  const key = keyIssues();
+  const patch = await Store.load(key);
+  if (stale(token)) return;
+
+  const all = issueList(patch);
+  const counts = { all: all.length, open: 0, checking: 0, answered: 0 };
+  all.forEach(i => { counts[i.status || 'open'] = (counts[i.status || 'open'] || 0) + 1; });
+  const rows = all.filter(i => S.issueFilter === 'all' || (i.status || 'open') === S.issueFilter);
+  const editing = S.issueEdit ? all.find(i => i.id === S.issueEdit) || {} : null;
+
+  const field = (id, label, value, ph) =>
+    `<label class="iss-f"><span>${label}</span><input id="${id}" value="${esc(value || '')}" placeholder="${esc(ph || '')}"></label>`;
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <div><h3>${editing ? 'Edit case' : 'Log a critical issue'}</h3>
+          <div class="sub">Use this when HQ is offline and you cannot resolve the inquiry yourself.
+            Tell the customer it is being checked, then record everything here.</div></div>
+        ${editing ? '<button class="btn btn-sm" id="iss-cancel">Cancel</button>' : ''}
+      </div>
+      <div class="card-body">
+        <div class="iss-form">
+          <div class="iss-grid">
+            ${field('iss-date', 'Date', (editing && editing.date) || todayISO())}
+            ${field('iss-country', 'Country', editing && editing.country, 'SG / MY / PH / TW / VN')}
+            ${field('iss-buyer', 'Buyer ID', editing && editing.buyer)}
+            ${field('iss-order', 'Order no.', editing && editing.order)}
+          </div>
+          <label class="iss-f"><span>What happened</span>
+            <textarea id="iss-issue" rows="3" placeholder="Describe the case in as much detail as you can \u2014 what the customer asked, what you already told them, what is still needed.">${esc((editing && editing.issue) || '')}</textarea></label>
+          <div class="iss-grid">
+            ${field('iss-attach', 'Screenshot / link', editing && editing.attachment, 'Paste a Drive or Shopee link')}
+            ${field('iss-handler', 'Handled by (HQ)', editing && editing.handler)}
+          </div>
+          <label class="iss-f"><span>Reply to customer (HQ fills this in)</span>
+            <textarea id="iss-reply" rows="3">${esc((editing && editing.reply) || '')}</textarea></label>
+          <div class="sh-form-row end">
+            <select id="iss-status">
+              ${Object.keys(ISSUE_STATUS).map(s =>
+                `<option value="${s}"${(editing && editing.status) === s ? ' selected' : ''}>${ISSUE_STATUS[s].label}</option>`).join('')}
+            </select>
+            <button class="btn btn-primary btn-sm" id="iss-save">${editing ? 'Save changes' : 'Log issue'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="seg">
+          <button data-ifilter="all" class="${S.issueFilter === 'all' ? 'on' : ''}">All (${counts.all})</button>
+          ${Object.keys(ISSUE_STATUS).map(s =>
+            `<button data-ifilter="${s}" class="${S.issueFilter === s ? 'on' : ''}">${ISSUE_STATUS[s].label} (${counts[s] || 0})</button>`).join('')}
+        </div>
+      </div>
+    </div>
+
+    ${rows.length ? rows.map(i => {
+      const st = ISSUE_STATUS[i.status || 'open'] || ISSUE_STATUS.open;
+      return `<div class="card iss">
+        <div class="iss-h">
+          <span class="chip">${esc(i.date || '')}</span>
+          ${i.country ? `<span class="chip">${esc(i.country)}</span>` : ''}
+          <b>${esc(i.buyer || 'Unknown buyer')}</b>
+          ${i.order ? `<span class="iss-order">${esc(i.order)}</span>` : ''}
+          <span class="chip ${st.chip}">${st.label}</span>
+          <button class="btn btn-sm" data-iedit="${esc(i.id)}">Edit</button>
+          <button class="btn btn-sm" data-idel="${esc(i.id)}">Delete</button>
+        </div>
+        <div class="iss-b">${esc(i.issue || '')}</div>
+        ${i.attachment ? `<div class="iss-att">\u{1F4CE} ${esc(i.attachment)}</div>` : ''}
+        ${i.reply ? `<div class="iss-reply"><div class="blk-h">Reply to customer${i.handler ? ' \u00B7 ' + esc(i.handler) : ''}</div>
+          <div>${esc(i.reply)}</div>
+          <div class="sh-note-a"><button class="btn btn-sm" data-copy="${esc(i.reply)}">Copy reply</button></div></div>` : ''}
+      </div>`;
+    }).join('') : '<div class="empty">No case with that status.</div>'}`;
+
+  el.querySelectorAll('[data-ifilter]').forEach(b => {
+    b.onclick = () => { S.issueFilter = b.dataset.ifilter; render(); };
+  });
+  el.querySelectorAll('[data-iedit]').forEach(b => {
+    b.onclick = () => { S.issueEdit = b.dataset.iedit; render(); window.scrollTo(0, 0); };
+  });
+  const cancel = el.querySelector('#iss-cancel');
+  if (cancel) cancel.onclick = () => { S.issueEdit = null; render(); };
+
+  const write = (id, patchObj) => {
+    const st = Store.local(key) || {};
+    st[id] = Object.assign({ id }, st[id], patchObj);
+    Store.set(key, st);
+  };
+
+  el.querySelectorAll('[data-idel]').forEach(b => {
+    b.onclick = () => {
+      if (!confirm('Delete this case?')) return;
+      write(b.dataset.idel, { deleted: true });
+      render();
+    };
+  });
+
+  el.querySelector('#iss-save').onclick = () => {
+    const v = id => (el.querySelector('#' + id).value || '').trim();
+    const issue = v('iss-issue');
+    if (!issue) { el.querySelector('#iss-issue').focus(); return; }
+    const id = S.issueEdit || ('i' + Date.now() + Math.random().toString(36).slice(2, 5));
+    write(id, {
+      date: v('iss-date') || todayISO(), country: v('iss-country'), buyer: v('iss-buyer'),
+      order: v('iss-order'), issue, attachment: v('iss-attach'), handler: v('iss-handler'),
+      reply: v('iss-reply'), status: v('iss-status'), by: authorName() || accountLabel(), ts: Date.now()
+    });
+    S.issueEdit = null;
+    render();
+  };
+}
+
 /* ---------------- view: SOP ---------------- */
 function viewSop(el) {
   const sop = SOPS[S.shop];
@@ -838,42 +1179,48 @@ function viewSop(el) {
 
 function sopItemHtml(item) {
   const open = !!S.openSop[item.id];
+  const p = `sop.${S.shop}.${item.id}`;
   return `<div class="sop-item${open ? ' open' : ''}" data-sopbody="${item.id}">
     <button class="sop-item-h" data-sopitem="${item.id}">
       <span class="caret">\u25B6</span>
-      <span class="t">${esc(item.title)}</span>
+      <span class="t">${edt(p + '.title', item.title)}</span>
       <span class="chip">${esc(item.cadence)}</span>
     </button>
     ${open ? `<div class="sop-body">
-      ${item.goal ? `<div class="sop-goal">${esc(item.goal)}</div>` : ''}
-      ${(item.blocks || []).map(blockHtml).join('')}
+      ${item.goal ? `<div class="sop-goal">${edt(p + '.goal', item.goal)}</div>` : ''}
+      ${(item.blocks || []).map((b, i) => blockHtml(b, `${p}.b${i}`)).join('')}
       ${item.links && item.links.length ? `<div class="linkrow">${item.links.map(l =>
         `<a class="chip link" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)} \u2197</a>`).join('')}</div>` : ''}
     </div>` : ''}
   </div>`;
 }
 
-function blockHtml(b) {
-  const head = b.title ? `<div class="blk-h">${esc(b.title)}</div>` : '';
+function blockHtml(b, p) {
+  const head = b.title ? `<div class="blk-h">${edt(p + '.h', b.title)}</div>` : '';
+  const li = (text, path) => `<li>${edt(path, text)}</li>`;
   switch (b.t) {
     case 'p':
-      return `<div class="blk">${head}<div style="font-size:13px">${esc(b.text)}</div></div>`;
+      return `<div class="blk">${head}<div style="font-size:13px">${edt(p + '.text', b.text)}</div></div>`;
     case 'list':
-      return `<div class="blk">${head}<ul>${b.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`;
+      return `<div class="blk">${head}<ul>${b.items.map((i, n) => li(i, `${p}.i${n}`)).join('')}</ul></div>`;
     case 'warn':
-      return `<div class="blk warn">${b.title ? `<div class="blk-h">\u26A0\uFE0F ${esc(b.title)}</div>` : '<div class="blk-h">\u26A0\uFE0F Important</div>'}
-        <ul>${b.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`;
+      return `<div class="blk warn">${b.title ? `<div class="blk-h">\u26A0\uFE0F ${edt(p + '.h', b.title)}</div>` : '<div class="blk-h">\u26A0\uFE0F Important</div>'}
+        <ul>${b.items.map((i, n) => li(i, `${p}.i${n}`)).join('')}</ul></div>`;
     case 'steps':
-      return `<div class="blk">${head}<ol>${b.items.map(s =>
-        `<li>${esc(s.text)}${s.sub ? `<ul>${s.sub.map(u => `<li>${esc(u)}</li>`).join('')}</ul>` : ''}</li>`).join('')}</ol></div>`;
+      return `<div class="blk">${head}<ol>${b.items.map((s, n) =>
+        `<li>${edt(`${p}.i${n}`, s.text)}${s.sub ? `<ul>${s.sub.map((u, m) =>
+          li(u, `${p}.i${n}.s${m}`)).join('')}</ul>` : ''}</li>`).join('')}</ol></div>`;
     case 'criteria':
-      return `<div class="blk">${head}<div class="crit">${b.items.map(i =>
-        `<div class="crit-i"><div class="l">${esc(i.label)}</div><div class="v">${esc(i.value)}</div></div>`).join('')}</div></div>`;
+      return `<div class="blk">${head}<div class="crit">${b.items.map((i, n) =>
+        `<div class="crit-i"><div class="l">${edt(`${p}.i${n}.l`, i.label)}</div>
+           <div class="v">${edt(`${p}.i${n}.v`, i.value)}</div></div>`).join('')}</div></div>`;
     case 'templates':
-      return `<div class="blk">${head}${b.items.map((i, n) =>
-        `<div class="tpl"><div class="tpl-h"><span>${esc(i.label)}</span>
-           <button class="btn btn-sm" data-copy="${esc(i.text).replace(/"/g, '&quot;')}">Copy</button></div>
-         <div class="tpl-b">${esc(i.text)}</div></div>`).join('')}</div>`;
+      return `<div class="blk">${head}${b.items.map((i, n) => {
+        const text = ed(`${p}.i${n}.text`, i.text);
+        return `<div class="tpl"><div class="tpl-h"><span>${edt(`${p}.i${n}.l`, i.label)}</span>
+           <button class="btn btn-sm" data-copy="${esc(text).replace(/"/g, '&quot;')}">Copy</button></div>
+         <div class="tpl-b" data-ed="${esc(p)}.i${n}.text" data-ed-multiline="1">${esc(text)}</div></div>`;
+      }).join('')}</div>`;
     default:
       return '';
   }
@@ -949,7 +1296,7 @@ async function viewHandover(el, token) {
             const k = sec.id + '_' + i.id, on = !!state[k];
             return `<div class="task${on ? ' done' : ''}">
               <input class="cb" type="checkbox" ${on ? 'checked' : ''} data-hv="${k}">
-              <div class="task-main"><div class="task-title" data-hvt="${k}">${esc(i.text)}</div></div>
+              <div class="task-main"><div class="task-title" data-hvt="${k}">${edt('hv.' + k, i.text)}</div></div>
             </div>`;
           }).join('')}
         </div>
@@ -966,7 +1313,12 @@ async function viewHandover(el, token) {
     cb.onchange = () => { save(cb.dataset.hv, cb.checked); render(); };
   });
   el.querySelectorAll('[data-hvt]').forEach(t => {
-    t.onclick = () => { const k = t.dataset.hvt; save(k, !(Store.local(key) || {})[k]); render(); };
+    t.onclick = () => {
+      if (editMode) return;
+      const k = t.dataset.hvt;
+      save(k, !(Store.local(key) || {})[k]);
+      render();
+    };
   });
   el.querySelectorAll('[data-meta]').forEach(inp => {
     inp.onchange = () => save(inp.dataset.meta, inp.value);
