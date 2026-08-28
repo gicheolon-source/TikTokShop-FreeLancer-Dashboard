@@ -1154,7 +1154,7 @@ async function viewIssues(el, token) {
           <div>${esc(i.reply)}</div>
           <div class="sh-note-a"><button class="btn btn-sm" data-copy="${esc(i.reply)}">Copy reply</button></div></div>` : ''}
       </div>`;
-    }).join('') : '<div class="empty">No case with that status.</div>'}`;
+    }).join('') : `<div class="empty">${all.length ? 'No case with that status.' : 'No cases logged yet. Use the form above when HQ is offline.'}</div>`}`;
 
   wireTabs();
   el.querySelectorAll('[data-ifilter]').forEach(b => {
