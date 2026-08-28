@@ -50,7 +50,9 @@ const S = {
   prodQuery: '',
   openProd: {},
   issueFilter: 'all',
-  issueEdit: null
+  issueEdit: null,
+  issueTab: 'issues',
+  logEdit: null
 };
 
 /* ---------------- helpers ---------------- */
@@ -124,6 +126,7 @@ const keyHandover = () => `fl_handover_${S.shop}`;
 const keyShift    = week => `fl_shift_${S.shop}_w${week}`;
 const keyTplUse   = () => 'fl_tpl_use';
 const keyIssues   = () => 'fl_issues';
+const keyLog      = () => 'fl_log';
 const keyEdits    = () => 'fl_content';
 
 /* ---------------- editable wording ----------------
@@ -405,6 +408,8 @@ async function viewToday(el, token) {
       </div>
     </div>
 
+    ${scheduleCard()}
+
     <div class="card" id="perf-card">
       <div class="card-head">
         <div><h3>Your shop, last 7 days</h3><div class="sub">Live from EUKA &middot; ${sop.flag} ${esc(sop.label)}</div></div>
@@ -430,6 +435,55 @@ async function viewToday(el, token) {
   if (el.querySelector('#today-week')) wireTasks(el.querySelector('#today-week'), 'weekly');
   updateNavBadge(done, tasks.length);
   loadPerf(S.shop, token);
+}
+
+/* ---------------- today: working timetable ----------------
+   data/schedule.js mirrors the shared Google Sheet. Only the days that are still
+   ahead are listed, so the card answers one question: when am I next on shift. */
+function scheduleCard() {
+  const sc = window.SCHEDULE;
+  if (!sc || !(sc.months || []).length) return '';
+
+  const today = todayISO();
+  const days = [];
+  sc.months.forEach(m => (m.days || []).forEach(d => days.push(Object.assign({ month: m.label }, d))));
+  days.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  const upcoming = days.filter(d => d.date >= today);
+  const rows = (upcoming.length ? upcoming : days.slice(-6)).slice(0, 8);
+  const next = upcoming[0];
+  const zones = sc.zones || [];
+  const day = iso => new Date(iso + 'T00:00:00')
+    .toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+
+  return `<div class="card">
+    <div class="card-head" style="flex-wrap:wrap;gap:10px">
+      <div><h3>Working timetable</h3>
+        <div class="sub">${esc(sc.person)} &middot; ${esc(sc.role)}</div></div>
+      <div class="tt-head">
+        ${sc.months.map(m => `<span class="chip">${esc(m.label)} &middot; ${esc(m.total)}</span>`).join('')}
+        ${sc.doc ? `<a class="btn btn-sm" href="${esc(sc.doc)}" target="_blank" rel="noopener">Open sheet</a>` : ''}
+      </div>
+    </div>
+    <div class="card-body">
+      ${next ? `<div class="tt-next">
+        <span class="chip ${next.date === today ? 'wknd' : 'ok'}">${next.date === today ? 'Today' : 'Next shift'}</span>
+        <b>${esc(day(next.date))}</b>
+        <span class="muted">${esc(next.hours || '')}</span>
+        ${zones.map(z => `<span class="tt-z">${esc(z.label)} <b>${esc(next[z.id] || '')}</b></span>`).join('')}
+      </div>` : '<div class="empty">No upcoming shift in the sheet yet.</div>'}
+      <div class="tt-wrap">
+        <table class="tt">
+          <thead><tr><th>Date</th><th>Hours</th>${zones.map(z => `<th>${esc(z.label)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(d => `<tr${d.date === today ? ' class="now"' : ''}>
+            <td><b>${esc(day(d.date))}</b></td>
+            <td>${esc(d.hours || '')}</td>
+            ${zones.map(z => `<td>${esc(d[z.id] || '')}</td>`).join('')}
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
 }
 
 /* ---------------- today: live shop performance ----------------
@@ -1009,10 +1063,26 @@ function issueList(patch) {
 
 async function viewIssues(el, token) {
   const key = keyIssues();
-  const patch = await Store.load(key);
+  const [patch, logState] = await Promise.all([Store.load(key), Store.load(keyLog())]);
   if (stale(token)) return;
 
   const all = issueList(patch);
+  const logs = logList(logState);
+  const tabs = `<div class="seg seg-top">
+    <button data-itab="issues" class="${S.issueTab === 'issues' ? 'on' : ''}">\u{1F6A8} Critical issues (${all.length})</button>
+    <button data-itab="log" class="${S.issueTab === 'log' ? 'on' : ''}">\u{1F4D3} Daily Log (${logs.length})</button>
+  </div>`;
+  const wireTabs = () => el.querySelectorAll('[data-itab]').forEach(b => {
+    b.onclick = () => { S.issueTab = b.dataset.itab; render(); };
+  });
+
+  if (S.issueTab === 'log') {
+    el.innerHTML = tabs + logPaneHtml(logs);
+    wireTabs();
+    wireLog(el);
+    return;
+  }
+
   const counts = { all: all.length, open: 0, checking: 0, answered: 0 };
   all.forEach(i => { counts[i.status || 'open'] = (counts[i.status || 'open'] || 0) + 1; });
   const rows = all.filter(i => S.issueFilter === 'all' || (i.status || 'open') === S.issueFilter);
@@ -1021,7 +1091,7 @@ async function viewIssues(el, token) {
   const field = (id, label, value, ph) =>
     `<label class="iss-f"><span>${label}</span><input id="${id}" value="${esc(value || '')}" placeholder="${esc(ph || '')}"></label>`;
 
-  el.innerHTML = `
+  el.innerHTML = tabs + `
     <div class="card">
       <div class="card-head">
         <div><h3>${editing ? 'Edit case' : 'Log a critical issue'}</h3>
@@ -1086,6 +1156,7 @@ async function viewIssues(el, token) {
       </div>`;
     }).join('') : '<div class="empty">No case with that status.</div>'}`;
 
+  wireTabs();
   el.querySelectorAll('[data-ifilter]').forEach(b => {
     b.onclick = () => { S.issueFilter = b.dataset.ifilter; render(); };
   });
@@ -1120,6 +1191,112 @@ async function viewIssues(el, token) {
       reply: v('iss-reply'), status: v('iss-status'), by: authorName() || accountLabel(), ts: Date.now()
     });
     S.issueEdit = null;
+    render();
+  };
+}
+
+/* ---------------- daily log ----------------
+   A plain work diary: who worked, on what day, what they actually did. It lives
+   in the same shared document style as the issue log so HQ and the next shift can
+   read it, and entries are grouped by day rather than by person. */
+function logList(state) {
+  return Object.values(state || {})
+    .filter(e => e && !e.deleted && e.text)
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || (b.ts || 0) - (a.ts || 0));
+}
+
+function logPaneHtml(logs) {
+  const editing = S.logEdit ? logs.find(e => e.id === S.logEdit) || null : null;
+  const mine = authorName();
+  const days = [];
+  logs.forEach(e => {
+    const d = days[days.length - 1];
+    if (d && d.date === e.date) d.items.push(e);
+    else days.push({ date: e.date, items: [e] });
+  });
+
+  return `<div class="card">
+    <div class="card-head">
+      <div><h3>${editing ? 'Edit entry' : 'Daily Log'}</h3>
+        <div class="sub">Write down what you did today &mdash; orders handled, replies sent, anything you noticed.
+          Your name and the date are saved with the entry.</div></div>
+      ${editing ? '<button class="btn btn-sm" id="log-cancel">Cancel</button>' : ''}
+    </div>
+    <div class="card-body">
+      <div class="sh-form">
+        <div class="sh-form-row">
+          <input id="log-name" placeholder="Your name" value="${esc(editing ? editing.name : mine)}">
+          <input id="log-date" type="date" value="${esc((editing && editing.date) || todayISO())}">
+        </div>
+        <textarea id="log-text" rows="5"
+          placeholder="e.g. Answered 12 SG chats, escalated 1 damaged parcel, checked stock on the Ceramide cream.">${esc((editing && editing.text) || '')}</textarea>
+        <div class="sh-form-row end">
+          <span class="muted" style="font-size:12px">Signed in as <b>${esc(accountLabel())}</b></span>
+          <button class="btn btn-primary btn-sm" id="log-save">${editing ? 'Save changes' : 'Save entry'}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  ${days.length ? days.map(d => `<div class="card">
+    <div class="card-head">
+      <div><h3>${esc(prettyDate(d.date))}</h3>
+        <div class="sub">${d.items.length} ${d.items.length === 1 ? 'entry' : 'entries'}</div></div>
+      ${d.date === todayISO() ? '<span class="chip ok">Today</span>' : ''}
+    </div>
+    <div class="card-body tight" style="padding-top:12px">
+      ${d.items.map(e => `<div class="sh-note">
+        <div class="sh-note-h">
+          <b>${esc(e.name || 'Unknown')}</b>
+          <span class="sh-note-t">saved ${esc(noteTime(e.ts))}${e.edited ? ' &middot; edited' : ''}</span>
+        </div>
+        <div class="sh-note-b">${esc(e.text)}</div>
+        <div class="sh-note-a">
+          <button class="btn btn-sm" data-ledit="${esc(e.id)}">Edit</button>
+          <button class="btn btn-sm" data-ldel="${esc(e.id)}">Delete</button>
+        </div>
+      </div>`).join('')}
+    </div>
+  </div>`).join('') : '<div class="empty">No entries yet. The first one goes above.</div>'}`;
+}
+
+function wireLog(el) {
+  const key = keyLog();
+  const write = (id, patch) => {
+    const st = Store.local(key) || {};
+    st[id] = Object.assign({ id }, st[id], patch);
+    Store.set(key, st);
+  };
+
+  const cancel = el.querySelector('#log-cancel');
+  if (cancel) cancel.onclick = () => { S.logEdit = null; render(); };
+
+  el.querySelectorAll('[data-ledit]').forEach(b => {
+    b.onclick = () => { S.logEdit = b.dataset.ledit; render(); window.scrollTo(0, 0); };
+  });
+  el.querySelectorAll('[data-ldel]').forEach(b => {
+    b.onclick = () => {
+      if (!confirm('Delete this entry?')) return;
+      write(b.dataset.ldel, { deleted: true });
+      render();
+    };
+  });
+
+  el.querySelector('#log-save').onclick = () => {
+    const name = el.querySelector('#log-name').value.trim();
+    const text = el.querySelector('#log-text').value.trim();
+    if (!name) { el.querySelector('#log-name').focus(); return; }
+    if (!text) { el.querySelector('#log-text').focus(); return; }
+    localStorage.setItem('fl_name', name);
+    const id = S.logEdit || ('l' + Date.now() + Math.random().toString(36).slice(2, 6));
+    write(id, {
+      name, text,
+      date: el.querySelector('#log-date').value || todayISO(),
+      account: accountLabel(),
+      ts: Date.now(),
+      edited: !!S.logEdit
+    });
+    S.logEdit = null;
     render();
   };
 }

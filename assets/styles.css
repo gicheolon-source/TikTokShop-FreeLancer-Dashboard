@@ -262,6 +262,25 @@ body.editing .task-title,body.editing .prod-h{cursor:text}
 .prod-tags{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
 .prod-foot{font-size:12px;color:var(--muted);margin-top:10px}
 
+/* ---------- working timetable ---------- */
+.tt-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tt-next{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 13px;margin-bottom:12px;
+  border-radius:10px;background:#fafbfc;border:1px solid var(--line)}
+.tt-next b{font-size:13.5px}
+.tt-z{font-size:12px;color:var(--muted)}
+.tt-z b{font-variant-numeric:tabular-nums;color:var(--text);font-size:12.5px}
+.tt-wrap{overflow-x:auto}
+table.tt{width:100%;border-collapse:collapse;font-size:12.5px}
+table.tt th{text-align:left;font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;
+  color:var(--faint);padding:0 12px 7px 0;white-space:nowrap}
+table.tt td{padding:8px 12px 8px 0;border-top:1px solid var(--line);white-space:nowrap;
+  font-variant-numeric:tabular-nums;color:var(--muted)}
+table.tt td b{color:var(--text);font-weight:600}
+table.tt tr.now td{background:var(--accent-soft)}
+
+/* ---------- page tabs ---------- */
+.seg-top{margin-bottom:16px}
+
 /* ---------- critical issues ---------- */
 .iss-form{display:flex;flex-direction:column;gap:11px}
 .iss-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px}
