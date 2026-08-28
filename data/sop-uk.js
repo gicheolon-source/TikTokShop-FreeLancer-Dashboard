@@ -7,6 +7,8 @@ window.SOP_UK = {
   id: 'uk',
   flag: '\u{1F1EC}\u{1F1E7}',
   label: 'UK Shop',
+  doc: 'https://docs.google.com/document/d/1UnarBU7HmyvMofokNjIUAmpeomtM1buBXxq66dev97s/edit?tab=t.0',
+  docTitle: '[UK] TikTok Shop Operation SOP',
   escalation: [
     { name: '\uc655\uc9c0\uc724 (June)', role: 'UK shop owner', contact: 'jiyoon.wang@neosimplix.com' },
     { name: '\uc628\uae30\ucca0 (Josh)', role: 'Manager', contact: 'gicheol.on@neosimplix.com' }

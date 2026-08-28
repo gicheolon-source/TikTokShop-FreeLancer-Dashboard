@@ -7,6 +7,8 @@ window.SOP_US = {
   id: 'us',
   flag: '\u{1F1FA}\u{1F1F8}',
   label: 'US Shop',
+  doc: 'https://docs.google.com/document/d/15xuHILHgcCBdvsMVMSqBkhHc3F-LNKAnDDkTmAdnE5Y/edit?tab=t.0',
+  docTitle: '[US] TikTok Shop Operation SOP',
   escalation: [
     { name: '\uae40\uc138\uc6d0 (Sienna)', role: 'US shop owner', contact: '' },
     { name: '\uc628\uae30\ucca0 (Josh)', role: 'Manager', contact: 'gicheol.on@neosimplix.com' }

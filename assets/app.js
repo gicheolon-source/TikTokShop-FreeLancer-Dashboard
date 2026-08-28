@@ -1150,6 +1150,11 @@ function viewSop(el) {
     .filter(x => x.items.length);
 
   el.innerHTML = `
+    <div class="sop-docs">
+      <span class="sop-docs-l">Source documents</span>
+      ${['us', 'uk'].map(s => `<a class="sop-doc${S.shop === s ? ' on' : ''}" href="${esc(SOPS[s].doc)}" target="_blank" rel="noopener">
+        ${SOPS[s].flag} ${esc(SOPS[s].docTitle)} <span class="ext">\u2197</span></a>`).join('')}
+    </div>
     <div style="margin-bottom:6px">
       <input class="sop-search" id="sop-q" placeholder="Search the ${esc(SOPS[S.shop].label)} SOP \u2014 e.g. reshipment, spark, refund" value="${esc(S.sopQuery)}">
     </div>

@@ -164,6 +164,12 @@ h1,h2,h3,h4{margin:0;font-weight:650;letter-spacing:-.01em}
 .seg button.on{background:#fff;color:var(--text);box-shadow:var(--shadow)}
 
 /* ---------- SOP ---------- */
+.sop-docs{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px}
+.sop-docs-l{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin-right:2px}
+.sop-doc{display:inline-flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--line);border-radius:999px;padding:7px 13px;font-size:12.5px;font-weight:600;color:var(--muted);text-decoration:none;box-shadow:var(--shadow)}
+.sop-doc:hover{border-color:var(--accent);color:var(--accent)}
+.sop-doc.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.sop-doc .ext{font-size:10px;opacity:.6}
 .sop-search{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px 14px;font:inherit;font-size:13.5px;background:#fff}
 .sop-search:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .sop-grp-h{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:700;color:var(--text);padding:20px 0 8px}
