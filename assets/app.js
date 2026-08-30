@@ -22,6 +22,7 @@ const ALLOWED_EMAILS  = [
 const SOPS = { us: window.SOP_US, uk: window.SOP_UK };
 const PAGES = [
   { id: 'today',     icon: '\u2600\uFE0F', label: 'Today',       title: 'Today' },
+  { id: 'team',      icon: '\u{1F465}',    label: 'Team',        title: 'Team dashboard' },
   { id: 'checklist', icon: '\u2705',       label: 'Checklist',   title: 'Task checklist' },
   { id: 'shift',     icon: '\u{1F4DD}',    label: 'Shift notes', title: 'Shift notes' },
   { id: 'sop',       icon: '\u{1F4D8}',    label: 'SOP',         title: 'Operation SOP' },
@@ -51,8 +52,7 @@ const S = {
   openProd: {},
   issueFilter: 'all',
   issueEdit: null,
-  issueTab: 'issues',
-  logEdit: null
+  teamDate: todayISO()
 };
 
 /* ---------------- helpers ---------------- */
@@ -126,7 +126,7 @@ const keyHandover = () => `fl_handover_${S.shop}`;
 const keyShift    = week => `fl_shift_${S.shop}_w${week}`;
 const keyTplUse   = () => 'fl_tpl_use';
 const keyIssues   = () => 'fl_issues';
-const keyLog      = () => 'fl_log';
+const keyTeam     = date => `fl_team_${date}`;
 const keyEdits    = () => 'fl_content';
 
 /* ---------------- editable wording ----------------
@@ -361,6 +361,7 @@ function render() {
   const token = ++renderToken;
   const out = ({
     today: viewToday,
+    team: viewTeam,
     checklist: viewChecklist,
     shift: viewShift,
     sop: viewSop,
@@ -1063,25 +1064,10 @@ function issueList(patch) {
 
 async function viewIssues(el, token) {
   const key = keyIssues();
-  const [patch, logState] = await Promise.all([Store.load(key), Store.load(keyLog())]);
+  const patch = await Store.load(key);
   if (stale(token)) return;
 
   const all = issueList(patch);
-  const logs = logList(logState);
-  const tabs = `<div class="seg seg-top">
-    <button data-itab="issues" class="${S.issueTab === 'issues' ? 'on' : ''}">\u{1F6A8} Critical issues (${all.length})</button>
-    <button data-itab="log" class="${S.issueTab === 'log' ? 'on' : ''}">\u{1F4D3} Daily Log (${logs.length})</button>
-  </div>`;
-  const wireTabs = () => el.querySelectorAll('[data-itab]').forEach(b => {
-    b.onclick = () => { S.issueTab = b.dataset.itab; render(); };
-  });
-
-  if (S.issueTab === 'log') {
-    el.innerHTML = tabs + logPaneHtml(logs);
-    wireTabs();
-    wireLog(el);
-    return;
-  }
 
   const counts = { all: all.length, open: 0, checking: 0, answered: 0 };
   all.forEach(i => { counts[i.status || 'open'] = (counts[i.status || 'open'] || 0) + 1; });
@@ -1091,7 +1077,7 @@ async function viewIssues(el, token) {
   const field = (id, label, value, ph) =>
     `<label class="iss-f"><span>${label}</span><input id="${id}" value="${esc(value || '')}" placeholder="${esc(ph || '')}"></label>`;
 
-  el.innerHTML = tabs + `
+  el.innerHTML = `
     <div class="card">
       <div class="card-head">
         <div><h3>${editing ? 'Edit case' : 'Log a critical issue'}</h3>
@@ -1156,7 +1142,6 @@ async function viewIssues(el, token) {
       </div>`;
     }).join('') : `<div class="empty">${all.length ? 'No case with that status.' : 'No cases logged yet. Use the form above when HQ is offline.'}</div>`}`;
 
-  wireTabs();
   el.querySelectorAll('[data-ifilter]').forEach(b => {
     b.onclick = () => { S.issueFilter = b.dataset.ifilter; render(); };
   });
@@ -1195,110 +1180,188 @@ async function viewIssues(el, token) {
   };
 }
 
-/* ---------------- daily log ----------------
-   A plain work diary: who worked, on what day, what they actually did. It lives
-   in the same shared document style as the issue log so HQ and the next shift can
-   read it, and entries are grouped by day rather than by person. */
-function logList(state) {
-  return Object.values(state || {})
-    .filter(e => e && !e.deleted && e.text)
-    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || (b.ts || 0) - (a.ts || 0));
+/* ---------------- view: team dashboard ----------------
+   One card per person: check in / check out for the day and write down what they
+   actually did. Everything is keyed by day (`fl_team_<date>`) with one field per
+   member, so three people writing at once never overwrite each other. */
+function member(id) {
+  return (window.TEAM || []).find(m => m.id === id) || { id, name: id, color: '#6b7280' };
+}
+function tmName(m) { return ed(`team.${m.id}.name`, m.name); }
+
+/* Store.load's "local wins" merge would let a stale copy of someone else's card
+   revert their newer entry, so this page reconciles per member by timestamp.
+   The page shows 8 days at once, so results are cached briefly -- otherwise every
+   check-in would re-fetch all of them and the buttons would lag behind. */
+const teamCache = {};
+const TEAM_TTL = 30000;
+
+async function loadTeamDay(date) {
+  const key = keyTeam(date);
+  const local = Store.local(key) || {};
+  const hit = teamCache[date];
+  if (hit && Date.now() - hit.ts < TEAM_TTL) return hit.data;
+  if (!S.user || !window.FB) return local;
+  try {
+    const remote = (await window.FB.get(key)) || {};
+    const out = {};
+    [...new Set([...Object.keys(local), ...Object.keys(remote)])].forEach(id => {
+      const a = local[id], b = remote[id];
+      out[id] = (!a || (b && (b.ts || 0) > (a.ts || 0))) ? b : a;
+    });
+    localStorage.setItem(key, JSON.stringify(out));
+    teamCache[date] = { data: out, ts: Date.now() };
+    return out;
+  } catch (e) {
+    console.warn('team load failed', e);
+    return local;
+  }
 }
 
-function logPaneHtml(logs) {
-  const editing = S.logEdit ? logs.find(e => e.id === S.logEdit) || null : null;
-  const mine = authorName();
-  const days = [];
-  logs.forEach(e => {
-    const d = days[days.length - 1];
-    if (d && d.date === e.date) d.items.push(e);
-    else days.push({ date: e.date, items: [e] });
-  });
+function tmHours(e) {
+  if (!e || !e.in || !e.out || e.out <= e.in) return null;
+  return (e.out - e.in) / 3600000;
+}
+function tmStatus(e) {
+  if (e && e.out) return { chip: '', text: `Checked out ${noteTime(e.out)}` };
+  if (e && e.in)  return { chip: 'ok', text: `Working since ${noteTime(e.in)}` };
+  return { chip: 'wknd', text: 'Not checked in' };
+}
+function tmAvatar(m, big) {
+  const size = big ? 'tm-av' : 'tm-av sm';
+  const initial = esc((tmName(m) || '?').trim().charAt(0).toUpperCase());
+  /* the picture is optional -- if the file is not there yet the initial shows */
+  return m.photo
+    ? `<span class="${size}" style="--c:${esc(m.color)}"><img src="${esc(m.photo)}" alt=""
+         onerror="this.remove()"><i>${initial}</i></span>`
+    : `<span class="${size}" style="--c:${esc(m.color)}"><i>${initial}</i></span>`;
+}
 
-  return `<div class="card">
-    <div class="card-head">
-      <div><h3>${editing ? 'Edit entry' : 'Daily Log'}</h3>
-        <div class="sub">Write down what you did today &mdash; orders handled, replies sent, anything you noticed.
-          Your name and the date are saved with the entry.</div></div>
-      ${editing ? '<button class="btn btn-sm" id="log-cancel">Cancel</button>' : ''}
-    </div>
-    <div class="card-body">
-      <div class="sh-form">
-        <div class="sh-form-row">
-          <input id="log-name" placeholder="Your name" value="${esc(editing ? editing.name : mine)}">
-          <input id="log-date" type="date" value="${esc((editing && editing.date) || todayISO())}">
+async function viewTeam(el, token) {
+  const date = S.teamDate;
+  const today = todayISO();
+  const day = await loadTeamDay(date);
+  if (stale(token)) return;
+
+  const monday = mondayISO(new Date(date + 'T00:00:00'));
+  const weekDays = Array.from({ length: 7 }, (_, i) => shiftDays(monday, i));
+  const week = await Promise.all(weekDays.map(d => loadTeamDay(d)));
+  if (stale(token)) return;
+
+  const team = window.TEAM || [];
+  const inToday = team.filter(m => day[m.id] && day[m.id].in).length;
+  const written = team.filter(m => day[m.id] && day[m.id].log).length;
+
+  const card = m => {
+    const e = day[m.id] || {};
+    const st = tmStatus(e);
+    const h = tmHours(e);
+    return `<div class="card tm-card">
+      <div class="tm-head">
+        ${tmAvatar(m, true)}
+        <div class="tm-id">
+          <b>${edt(`team.${m.id}.name`, m.name)}</b>
+          <span>${edt(`team.${m.id}.role`, m.role)}</span>
         </div>
-        <textarea id="log-text" rows="5"
-          placeholder="e.g. Answered 12 SG chats, escalated 1 damaged parcel, checked stock on the Ceramide cream.">${esc((editing && editing.text) || '')}</textarea>
-        <div class="sh-form-row end">
-          <span class="muted" style="font-size:12px">Signed in as <b>${esc(accountLabel())}</b></span>
-          <button class="btn btn-primary btn-sm" id="log-save">${editing ? 'Save changes' : 'Save entry'}</button>
+        <span class="chip ${st.chip}">${st.text}</span>
+      </div>
+      <div class="tm-att">
+        <button class="btn btn-sm${e.in ? '' : ' btn-primary'}" data-tmin="${m.id}"${e.in ? ' disabled' : ''}>
+          ${e.in ? 'In ' + noteTime(e.in) : 'Check in'}</button>
+        <button class="btn btn-sm${e.in && !e.out ? ' btn-primary' : ''}" data-tmout="${m.id}"${!e.in || e.out ? ' disabled' : ''}>
+          ${e.out ? 'Out ' + noteTime(e.out) : 'Check out'}</button>
+        ${h ? `<span class="tm-hrs">${h.toFixed(1)}h</span>` : ''}
+        ${e.in ? `<button class="btn btn-sm tm-undo" data-tmreset="${m.id}">Reset</button>` : ''}
+      </div>
+      <div class="tm-log">
+        <label>What ${esc(tmName(m))} did on this day</label>
+        <textarea id="tm-log-${m.id}" rows="5"
+          placeholder="e.g. Answered 12 SG chats, escalated 1 damaged parcel, checked stock on the Ceramide cream.">${esc(e.log || '')}</textarea>
+        <div class="tm-log-f">
+          <span class="muted">${e.logTs ? 'Saved ' + esc(noteTime(e.logTs)) : 'Not written yet'}</span>
+          <button class="btn btn-sm btn-primary" data-tmsave="${m.id}">Save</button>
+        </div>
+      </div>
+    </div>`;
+  };
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-head" style="flex-wrap:wrap;gap:10px">
+        <div><h3>${esc(prettyDate(date))}</h3>
+          <div class="sub">Check in when you start, write down what you did, check out when you finish.</div></div>
+        <div class="datebar">
+          <button class="btn btn-sm" data-tmnav="-1">&lsaquo;</button>
+          <input type="date" id="tm-date" value="${date}">
+          <button class="btn btn-sm" data-tmnav="1">&rsaquo;</button>
+          <button class="btn btn-sm" data-tmnav="0"${date === today ? ' disabled' : ''}>Today</button>
+          <span class="chip${inToday ? ' ok' : ''}">${inToday}/${team.length} in</span>
+          <span class="chip">${written}/${team.length} logged</span>
         </div>
       </div>
     </div>
-  </div>
 
-  ${days.length ? days.map(d => `<div class="card">
-    <div class="card-head">
-      <div><h3>${esc(prettyDate(d.date))}</h3>
-        <div class="sub">${d.items.length} ${d.items.length === 1 ? 'entry' : 'entries'}</div></div>
-      ${d.date === todayISO() ? '<span class="chip ok">Today</span>' : ''}
-    </div>
-    <div class="card-body tight" style="padding-top:12px">
-      ${d.items.map(e => `<div class="sh-note">
-        <div class="sh-note-h">
-          <b>${esc(e.name || 'Unknown')}</b>
-          <span class="sh-note-t">saved ${esc(noteTime(e.ts))}${e.edited ? ' &middot; edited' : ''}</span>
-        </div>
-        <div class="sh-note-b">${esc(e.text)}</div>
-        <div class="sh-note-a">
-          <button class="btn btn-sm" data-ledit="${esc(e.id)}">Edit</button>
-          <button class="btn btn-sm" data-ldel="${esc(e.id)}">Delete</button>
-        </div>
-      </div>`).join('')}
-    </div>
-  </div>`).join('') : '<div class="empty">No entries yet. The first one goes above.</div>'}`;
-}
+    <div class="team-grid">${team.map(card).join('')}</div>
 
-function wireLog(el) {
-  const key = keyLog();
+    <div class="card">
+      <div class="card-head"><div><h3>This week</h3>
+        <div class="sub">${esc(weekLabel(monday))} &middot; check-in time and hours</div></div></div>
+      <div class="card-body">
+        <div class="tt-wrap"><table class="tt tm-week">
+          <thead><tr><th>Member</th>${weekDays.map(d => `<th${d === today ? ' class="now"' : ''}>${
+            new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' })}</th>`).join('')}<th>Total</th></tr></thead>
+          <tbody>${team.map(m => {
+            let total = 0;
+            const cells = week.map((d, i) => {
+              const e = (d || {})[m.id];
+              const h = tmHours(e);
+              if (h) total += h;
+              const mark = e && e.in ? noteTime(e.in) + (h ? `<small>${h.toFixed(1)}h</small>` : '') : '&middot;';
+              return `<td class="${weekDays[i] === date ? 'sel' : ''}${e && e.log ? ' has-log' : ''}">${mark}</td>`;
+            }).join('');
+            return `<tr><td><b>${esc(tmName(m))}</b></td>${cells}<td><b>${total ? total.toFixed(1) + 'h' : '\u2014'}</b></td></tr>`;
+          }).join('')}</tbody>
+        </table></div>
+      </div>
+    </div>`;
+
   const write = (id, patch) => {
+    const key = keyTeam(date);
     const st = Store.local(key) || {};
-    st[id] = Object.assign({ id }, st[id], patch);
+    st[id] = Object.assign({}, st[id], patch, { ts: Date.now(), by: accountLabel() });
     Store.set(key, st);
+    teamCache[date] = { data: st, ts: Date.now() };   /* our own write is the freshest copy */
+    render();
   };
 
-  const cancel = el.querySelector('#log-cancel');
-  if (cancel) cancel.onclick = () => { S.logEdit = null; render(); };
-
-  el.querySelectorAll('[data-ledit]').forEach(b => {
-    b.onclick = () => { S.logEdit = b.dataset.ledit; render(); window.scrollTo(0, 0); };
-  });
-  el.querySelectorAll('[data-ldel]').forEach(b => {
+  el.querySelectorAll('[data-tmnav]').forEach(b => {
     b.onclick = () => {
-      if (!confirm('Delete this entry?')) return;
-      write(b.dataset.ldel, { deleted: true });
+      const n = +b.dataset.tmnav;
+      S.teamDate = n === 0 ? today : shiftDays(S.teamDate, n);
       render();
     };
   });
+  const di = el.querySelector('#tm-date');
+  di.onchange = () => { S.teamDate = di.value || today; render(); };
 
-  el.querySelector('#log-save').onclick = () => {
-    const name = el.querySelector('#log-name').value.trim();
-    const text = el.querySelector('#log-text').value.trim();
-    if (!name) { el.querySelector('#log-name').focus(); return; }
-    if (!text) { el.querySelector('#log-text').focus(); return; }
-    localStorage.setItem('fl_name', name);
-    const id = S.logEdit || ('l' + Date.now() + Math.random().toString(36).slice(2, 6));
-    write(id, {
-      name, text,
-      date: el.querySelector('#log-date').value || todayISO(),
-      account: accountLabel(),
-      ts: Date.now(),
-      edited: !!S.logEdit
-    });
-    S.logEdit = null;
-    render();
-  };
+  el.querySelectorAll('[data-tmin]').forEach(b => {
+    b.onclick = () => write(b.dataset.tmin, { in: Date.now() });
+  });
+  el.querySelectorAll('[data-tmout]').forEach(b => {
+    b.onclick = () => write(b.dataset.tmout, { out: Date.now() });
+  });
+  el.querySelectorAll('[data-tmreset]').forEach(b => {
+    b.onclick = () => {
+      if (!confirm(`Clear the check-in and check-out for ${tmName(member(b.dataset.tmreset))} on this day?`)) return;
+      write(b.dataset.tmreset, { in: 0, out: 0 });
+    };
+  });
+  el.querySelectorAll('[data-tmsave]').forEach(b => {
+    b.onclick = () => {
+      const id = b.dataset.tmsave;
+      write(id, { log: el.querySelector('#tm-log-' + id).value.trim(), logTs: Date.now() });
+    };
+  });
 }
 
 /* ---------------- view: SOP ---------------- */
